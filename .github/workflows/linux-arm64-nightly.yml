@@ -25,20 +25,29 @@ jobs:
       artifact_name: ${{ steps.nightly.outputs.artifact_name }}
       should_build: ${{ steps.nightly.outputs.should_build }}
     steps:
-      - name: Checkout trusted resolver
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-          sparse-checkout: .github/scripts
+      - name: Fetch trusted resolver
+        env:
+          RESOLVER_REF: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          resolver_dir="$RUNNER_TEMP/linux-arm64-nightly-resolver"
+          base_url="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${RESOLVER_REF}/.github/scripts"
+          mkdir -p "$resolver_dir"
+          curl --proto '=https' --tlsv1.2 --retry 3 -fsSLo \
+            "$resolver_dir/linux-arm64-nightly.cjs" \
+            "$base_url/linux-arm64-nightly.cjs"
+          curl --proto '=https' --tlsv1.2 --retry 3 -fsSLo \
+            "$resolver_dir/linux-arm64-nightly.test.cjs" \
+            "$base_url/linux-arm64-nightly.test.cjs"
 
       - name: Test nightly resolver
-        run: node --test .github/scripts/linux-arm64-nightly.test.cjs
+        run: node --test "$RUNNER_TEMP/linux-arm64-nightly-resolver/linux-arm64-nightly.test.cjs"
 
       - id: nightly
         name: Select newest unbuilt upstream nightly
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: node .github/scripts/linux-arm64-nightly.cjs
+        run: node "$RUNNER_TEMP/linux-arm64-nightly-resolver/linux-arm64-nightly.cjs"
 
   build:
     name: Build Linux ARM64 AppImage
@@ -89,13 +98,13 @@ jobs:
             xvfb
           rm -rf /var/lib/apt/lists/*
 
-      - name: Checkout exact upstream nightly
-        uses: actions/checkout@v6
-        with:
-          repository: pingdotgg/t3code
-          ref: ${{ needs.resolve.outputs.tag }}
-          fetch-depth: 1
-          persist-credentials: false
+      - name: Clone exact upstream nightly
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch "$UPSTREAM_TAG" --single-branch \
+            https://github.com/pingdotgg/t3code.git .
+          test "$(git tag --points-at HEAD | grep -Fx "$UPSTREAM_TAG")" = "$UPSTREAM_TAG"
 
       - name: Install Rust
         shell: bash
