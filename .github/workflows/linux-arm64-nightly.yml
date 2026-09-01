@@ -160,7 +160,7 @@ jobs:
           "$appimage_path" --appimage-extract >/dev/null
           find squashfs-root -type f -exec file {} + > elf-files.txt
           awk '
-            /: ELF / {
+            /:[[:space:]]+ELF / {
               seen++
               if ($0 !~ /ARM aarch64/) {
                 print "Wrong-architecture payload: " $0 > "/dev/stderr"
