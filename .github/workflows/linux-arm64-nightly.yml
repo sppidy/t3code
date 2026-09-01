@@ -1,0 +1,242 @@
+name: Linux ARM64 Nightly
+
+on:
+  schedule:
+    - cron: "37 */3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-arm64-nightly
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    name: Resolve upstream nightly
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.nightly.outputs.tag }}
+      version: ${{ steps.nightly.outputs.version }}
+      published_at: ${{ steps.nightly.outputs.published_at }}
+      release_tag: ${{ steps.nightly.outputs.release_tag }}
+      artifact_name: ${{ steps.nightly.outputs.artifact_name }}
+      should_build: ${{ steps.nightly.outputs.should_build }}
+    steps:
+      - name: Checkout trusted resolver
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+
+      - name: Test nightly resolver
+        run: node --test .github/scripts/linux-arm64-nightly.test.cjs
+
+      - id: nightly
+        name: Select newest unbuilt upstream nightly
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node .github/scripts/linux-arm64-nightly.cjs
+
+  build:
+    name: Build Linux ARM64 AppImage
+    needs: resolve
+    if: needs.resolve.outputs.should_build == 'true'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    container:
+      image: node:24.13.1-trixie
+    env:
+      CI: "1"
+      DEBIAN_FRONTEND: noninteractive
+      SHELL: /bin/bash
+      UPSTREAM_TAG: ${{ needs.resolve.outputs.tag }}
+      VERSION: ${{ needs.resolve.outputs.version }}
+      ARTIFACT_NAME: ${{ needs.resolve.outputs.artifact_name }}
+    outputs:
+      upstream_commit: ${{ steps.package.outputs.upstream_commit }}
+    steps:
+      - name: Install container build prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(dpkg --print-architecture)" = arm64
+          test "$(node -p 'process.arch')" = arm64
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential \
+            ca-certificates \
+            curl \
+            dbus-x11 \
+            file \
+            git \
+            imagemagick \
+            libasound2 \
+            libfuse2 \
+            libgbm1 \
+            libgtk-3-0 \
+            libnss3 \
+            libsecret-1-0 \
+            libudev-dev \
+            libx11-xcb1 \
+            libxss1 \
+            pkg-config \
+            python3 \
+            xvfb
+          rm -rf /var/lib/apt/lists/*
+
+      - name: Checkout exact upstream nightly
+        uses: actions/checkout@v6
+        with:
+          repository: pingdotgg/t3code
+          ref: ${{ needs.resolve.outputs.tag }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Install Rust
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs \
+            | sh -s -- -y --profile minimal --default-toolchain stable
+          printf '%s\n' "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          "$HOME/.cargo/bin/rustc" --version
+          "$HOME/.cargo/bin/cargo" --version
+
+      - name: Install Vite+
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL https://vite.plus | bash
+          printf '%s\n' "$HOME/.local/share/vite-plus/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/share/vite-plus/bin/vp" --version
+
+      - name: Install desktop dependencies
+        run: vp install --filter=@t3tools/desktop... --filter=t3... --filter=@t3tools/scripts...
+
+      - name: Align package versions
+        run: node scripts/update-release-package-versions.ts "$VERSION"
+
+      - name: Build ARM64 AppImage
+        run: |
+          vp run dist:desktop:artifact \
+            --platform linux \
+            --target AppImage \
+            --arch arm64 \
+            --build-version "$VERSION" \
+            --output-dir "$GITHUB_WORKSPACE/release" \
+            --verbose
+
+      - id: package
+        name: Verify and package build output
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          appimages=(release/*.AppImage)
+          test "${#appimages[@]}" -eq 1
+          appimage="${appimages[0]}"
+          test "$(basename "$appimage")" = "$ARTIFACT_NAME"
+          file "$appimage" | grep -F 'ARM aarch64'
+
+          appimage_path="$(realpath "$appimage")"
+          verification_dir="$RUNNER_TEMP/t3code-appimage-verification"
+          mkdir -p "$verification_dir"
+          cd "$verification_dir"
+          "$appimage_path" --appimage-extract >/dev/null
+          find squashfs-root -type f -exec file {} + > elf-files.txt
+          awk '
+            /: ELF / {
+              seen++
+              if ($0 !~ /ARM aarch64/) {
+                print "Wrong-architecture payload: " $0 > "/dev/stderr"
+                bad++
+              }
+            }
+            END {
+              printf "Verified %d ARM64 ELF payloads\n", seen
+              if (seen == 0 || bad > 0) exit 1
+            }
+          ' elf-files.txt
+
+          cd "$GITHUB_WORKSPACE"
+          upstream_commit="$(git rev-parse HEAD)"
+          test "$(git tag --points-at HEAD | grep -Fx "$UPSTREAM_TAG")" = "$UPSTREAM_TAG"
+          mkdir -p publish
+          mv "$appimage" "publish/$ARTIFACT_NAME"
+          (
+            cd publish
+            sha256sum "$ARTIFACT_NAME" > "$ARTIFACT_NAME.sha256"
+          )
+          printf 'upstream_repository=pingdotgg/t3code\nupstream_tag=%s\nupstream_commit=%s\nversion=%s\nbuild_arch=arm64\ncontainer=node:24.13.1-trixie\n' \
+            "$UPSTREAM_TAG" "$upstream_commit" "$VERSION" \
+            > publish/BUILD-PROVENANCE.txt
+          printf 'upstream_commit=%s\n' "$upstream_commit" >> "$GITHUB_OUTPUT"
+
+      - name: Upload verified build artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: t3-code-linux-arm64-${{ needs.resolve.outputs.version }}
+          path: publish/*
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+  publish:
+    name: Publish fork prerelease
+    needs: [resolve, build]
+    if: needs.build.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download verified build artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: t3-code-linux-arm64-${{ needs.resolve.outputs.version }}
+          path: dist
+
+      - name: Recheck artifact boundary
+        env:
+          ARTIFACT_NAME: ${{ needs.resolve.outputs.artifact_name }}
+          UPSTREAM_TAG: ${{ needs.resolve.outputs.tag }}
+          UPSTREAM_COMMIT: ${{ needs.build.outputs.upstream_commit }}
+        run: |
+          set -euo pipefail
+          test "$(find dist -maxdepth 1 -type f | wc -l)" -eq 3
+          test -f "dist/$ARTIFACT_NAME"
+          test -f "dist/$ARTIFACT_NAME.sha256"
+          test -f dist/BUILD-PROVENANCE.txt
+          (cd dist && sha256sum -c "$ARTIFACT_NAME.sha256")
+          grep -Fx "upstream_tag=$UPSTREAM_TAG" dist/BUILD-PROVENANCE.txt
+          grep -Fx "upstream_commit=$UPSTREAM_COMMIT" dist/BUILD-PROVENANCE.txt
+
+      - name: Create or repair fork prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.resolve.outputs.release_tag }}
+          VERSION: ${{ needs.resolve.outputs.version }}
+          UPSTREAM_TAG: ${{ needs.resolve.outputs.tag }}
+          UPSTREAM_COMMIT: ${{ needs.build.outputs.upstream_commit }}
+        run: |
+          set -euo pipefail
+          notes_file="$RUNNER_TEMP/release-notes.md"
+          printf 'Automated native Linux ARM64 build of [%s](https://github.com/pingdotgg/t3code/releases/tag/%s) at commit [%s](https://github.com/pingdotgg/t3code/commit/%s).\n\nBuilt on GitHub-hosted ARM64 using the containerized Node 24/Trixie toolchain. The AppImage checksum and build provenance are attached.\n' \
+            "$UPSTREAM_TAG" "$UPSTREAM_TAG" "$UPSTREAM_COMMIT" "$UPSTREAM_COMMIT" \
+            > "$notes_file"
+
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$RELEASE_TAG" dist/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "T3 Code Linux ARM64 $VERSION" \
+              --notes-file "$notes_file" \
+              --prerelease
+          fi
