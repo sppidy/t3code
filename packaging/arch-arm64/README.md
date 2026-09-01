@@ -9,7 +9,7 @@ Add the repository to `/etc/pacman.conf`:
 ```ini
 [t3code-arm64]
 SigLevel = Optional TrustAll
-Server = https://sppidy.github.io/t3code/$arch
+Server = https://t3-repo.sppidy.in/$arch
 ```
 
 Then synchronize package databases and install T3 Code:

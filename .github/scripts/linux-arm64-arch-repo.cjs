@@ -4,9 +4,29 @@ const path = require("node:path");
 const NIGHTLY_VERSION = /^\d+\.\d+\.\d+-nightly\.\d{8}\.\d+$/;
 const GITHUB_REPOSITORY = /^([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))\/([A-Za-z0-9._-]+)$/;
 
-function repositoryServerUrl(githubRepository) {
+function repositoryServerUrl(githubRepository, pagesBaseUrl) {
   const match = GITHUB_REPOSITORY.exec(githubRepository);
   if (!match) throw new Error(`Invalid GitHub repository: ${githubRepository}`);
+
+  if (pagesBaseUrl) {
+    let customOrigin;
+    try {
+      customOrigin = new URL(pagesBaseUrl);
+    } catch {
+      throw new Error(`Invalid Pages base URL: ${pagesBaseUrl}`);
+    }
+    if (
+      customOrigin.protocol !== "https:" ||
+      customOrigin.username ||
+      customOrigin.password ||
+      customOrigin.pathname !== "/" ||
+      customOrigin.search ||
+      customOrigin.hash
+    ) {
+      throw new Error(`Invalid Pages base URL: ${pagesBaseUrl}`);
+    }
+    return `${customOrigin.origin}/$arch`;
+  }
 
   const [, owner, repository] = match;
   return `https://${owner.toLowerCase()}.github.io/${repository}/$arch`;
@@ -95,6 +115,7 @@ async function replaceAliasWithCopy(source, destination) {
 async function materializeRepositorySite({
   siteDirectory,
   githubRepository,
+  pagesBaseUrl,
   version,
   packageName,
 }) {
@@ -103,7 +124,7 @@ async function materializeRepositorySite({
     throw new Error(`Package filename does not match nightly version: ${packageName}`);
   }
 
-  const serverUrl = repositoryServerUrl(githubRepository);
+  const serverUrl = repositoryServerUrl(githubRepository, pagesBaseUrl);
   const architectureDirectory = path.join(siteDirectory, "aarch64");
   await assertRegularFile(path.join(architectureDirectory, packageName), "Arch package");
   await assertRegularFile(
@@ -148,6 +169,7 @@ async function run({ env = process.env, logger = console.log } = {}) {
   const result = await materializeRepositorySite({
     siteDirectory: env.REPOSITORY_SITE_DIR,
     githubRepository: env.GITHUB_REPOSITORY,
+    pagesBaseUrl: env.PAGES_BASE_URL,
     version: env.VERSION,
     packageName: env.PACKAGE_NAME,
   });

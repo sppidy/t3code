@@ -23,6 +23,17 @@ test("derives the project Pages pacman server URL", () => {
   );
 });
 
+test("uses a custom Pages origin for the pacman server URL", () => {
+  assert.equal(typeof repository?.repositoryServerUrl, "function");
+  assert.equal(
+    repository.repositoryServerUrl(
+      "sppidy/t3code",
+      "https://t3-repo.sppidy.in",
+    ),
+    "https://t3-repo.sppidy.in/$arch",
+  );
+});
+
 test("materializes a symlink-free repository site with install instructions", async (context) => {
   assert.equal(typeof repository?.materializeRepositorySite, "function");
 
@@ -58,12 +69,13 @@ test("materializes a symlink-free repository site with install instructions", as
   const result = await repository.materializeRepositorySite({
     siteDirectory,
     githubRepository: "sppidy/t3code",
+    pagesBaseUrl: "https://t3-repo.sppidy.in",
     version,
     packageName,
   });
 
   assert.deepEqual(result, {
-    serverUrl: "https://sppidy.github.io/t3code/$arch",
+    serverUrl: "https://t3-repo.sppidy.in/$arch",
     packageName,
   });
 
@@ -79,7 +91,7 @@ test("materializes a symlink-free repository site with install instructions", as
   const rootIndex = fs.readFileSync(path.join(siteDirectory, "index.html"), "utf8");
   assert.match(rootIndex, /\[t3code-arm64\]/);
   assert.match(rootIndex, /SigLevel = Optional TrustAll/);
-  assert.match(rootIndex, /https:\/\/sppidy\.github\.io\/t3code\/\$arch/);
+  assert.match(rootIndex, /https:\/\/t3-repo\.sppidy\.in\/\$arch/);
   assert.match(rootIndex, /sudo pacman -Syu t3code-nightly-bin/);
   assert.match(rootIndex, new RegExp(`aarch64/${packageName}`));
 

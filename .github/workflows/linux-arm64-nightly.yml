@@ -79,6 +79,7 @@ jobs:
       ARTIFACT_NAME: ${{ needs.resolve.outputs.artifact_name }}
       ARCH_PKGVER: ${{ needs.resolve.outputs.arch_pkgver }}
       PACKAGE_NAME: ${{ needs.resolve.outputs.package_name }}
+      PAGES_BASE_URL: https://t3-repo.sppidy.in
     outputs:
       upstream_commit: ${{ steps.package.outputs.upstream_commit }}
     steps:
