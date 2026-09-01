@@ -1,0 +1,101 @@
+: "${T3CODE_ARCH_PKGVER:?T3CODE_ARCH_PKGVER is required}"
+: "${T3CODE_ARTIFACT_NAME:?T3CODE_ARTIFACT_NAME is required}"
+: "${T3CODE_APPIMAGE_SHA256:?T3CODE_APPIMAGE_SHA256 is required}"
+: "${T3CODE_LICENSE_SHA256:?T3CODE_LICENSE_SHA256 is required}"
+
+pkgname=t3code-nightly-bin
+pkgver="$T3CODE_ARCH_PKGVER"
+pkgrel=1
+pkgdesc='Nightly desktop control surface for local coding agents'
+arch=('aarch64')
+url='https://github.com/pingdotgg/t3code'
+license=('MIT')
+depends=(
+  'alsa-lib'
+  'at-spi2-core'
+  'cairo'
+  'dbus'
+  'expat'
+  'gdk-pixbuf2'
+  'glib2'
+  'glibc'
+  'gtk3'
+  'hicolor-icon-theme'
+  'libcups'
+  'libdrm'
+  'libgcc'
+  'libstdc++'
+  'libx11'
+  'libxcb'
+  'libxcomposite'
+  'libxdamage'
+  'libxext'
+  'libxfixes'
+  'libxkbcommon'
+  'libxrandr'
+  'mesa'
+  'nspr'
+  'nss'
+  'pango'
+  'systemd-libs'
+  'xdg-utils'
+  'zlib'
+)
+optdepends=('openai-codex: use the system-installed Codex CLI')
+provides=("t3code-nightly=$pkgver")
+conflicts=('t3code-nightly' 't3code')
+options=('!debug' '!strip')
+
+_appimage="$T3CODE_ARTIFACT_NAME"
+_license="${pkgname}-${pkgver}-LICENSE"
+source=("$_appimage" "$_license")
+sha256sums=("$T3CODE_APPIMAGE_SHA256" "$T3CODE_LICENSE_SHA256")
+
+prepare() {
+  chmod +x "$srcdir/$_appimage"
+  rm -rf "$srcdir/squashfs-root"
+  "$srcdir/$_appimage" --appimage-extract >/dev/null
+
+  if [[ ! -x "$srcdir/squashfs-root/AppRun" ||
+        ! -f "$srcdir/squashfs-root/chrome-sandbox" ]]; then
+    echo 'The AppImage payload is missing its launcher or Chromium sandbox.' >&2
+    return 1
+  fi
+}
+
+package() {
+  install -d "$pkgdir/opt/$pkgname"
+  cp -a --no-preserve=ownership "$srcdir/squashfs-root/." "$pkgdir/opt/$pkgname/"
+  chmod -R u=rwX,go=rX "$pkgdir/opt/$pkgname"
+  chmod 4755 "$pkgdir/opt/$pkgname/chrome-sandbox"
+
+  install -Dm755 /dev/stdin "$pkgdir/usr/bin/t3code-nightly" <<'EOF'
+#!/bin/sh
+exec /opt/t3code-nightly-bin/AppRun "$@"
+EOF
+  ln -s t3code-nightly "$pkgdir/usr/bin/t3-code-nightly-desktop"
+
+  local icon size_dir
+  for icon in "$srcdir"/squashfs-root/usr/share/icons/hicolor/*/apps/t3code.png; do
+    size_dir="${icon%/apps/t3code.png}"
+    install -Dm644 "$icon" \
+      "$pkgdir/usr/share/icons/hicolor/${size_dir##*/}/apps/t3code-nightly.png"
+  done
+
+  install -Dm644 /dev/stdin "$pkgdir/usr/share/applications/t3code.desktop" <<'EOF'
+[Desktop Entry]
+Name=T3 Code Nightly
+Comment=Nightly desktop control surface for local coding agents
+Exec=t3code-nightly %U
+TryExec=t3code-nightly
+Terminal=false
+Type=Application
+Icon=t3code-nightly
+StartupWMClass=t3code
+Categories=Development;
+MimeType=x-scheme-handler/t3code;
+EOF
+
+  install -Dm644 "$srcdir/$_license" \
+    "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

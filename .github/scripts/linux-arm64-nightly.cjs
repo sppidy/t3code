@@ -1,6 +1,19 @@
 const fs = require("node:fs/promises");
 
 const NIGHTLY_TAG = /^v(\d+\.\d+\.\d+-nightly\.\d{8}\.\d+)$/;
+const NIGHTLY_VERSION = /^\d+\.\d+\.\d+-nightly\.\d{8}\.\d+$/;
+
+function deriveArchPackage(version) {
+  if (!NIGHTLY_VERSION.test(version)) {
+    throw new Error(`Invalid nightly version: ${version}`);
+  }
+
+  const archPkgver = version.replace("-nightly.", "_nightly.");
+  return {
+    archPkgver,
+    packageName: `t3code-nightly-bin-${archPkgver}-1-aarch64.pkg.tar.zst`,
+  };
+}
 
 function selectLatestNightly(releases) {
   const candidates = releases
@@ -50,12 +63,20 @@ async function resolveNightly({
   const selected = selectLatestNightly(await upstreamResponse.json());
   const releaseTag = `linux-arm64-${selected.tag}`;
   const artifactName = `T3-Code-${selected.version}-arm64.AppImage`;
+  const { archPkgver, packageName } = deriveArchPackage(selected.version);
   const releaseResponse = await fetchImpl(
     `${apiUrl}/repos/${repository}/releases/tags/${encodeURIComponent(releaseTag)}`,
     { headers },
   );
   if (releaseResponse?.status === 404) {
-    return { ...selected, releaseTag, artifactName, shouldBuild: true };
+    return {
+      ...selected,
+      releaseTag,
+      artifactName,
+      archPkgver,
+      packageName,
+      shouldBuild: true,
+    };
   }
   if (!releaseResponse?.ok) {
     throw new Error(`Could not inspect fork release: HTTP ${releaseResponse?.status ?? "unknown"}`);
@@ -63,9 +84,22 @@ async function resolveNightly({
 
   const release = await releaseResponse.json();
   const assetNames = new Set(release.assets.map((asset) => asset.name));
-  const requiredAssets = [artifactName, `${artifactName}.sha256`, "BUILD-PROVENANCE.txt"];
+  const requiredAssets = [
+    artifactName,
+    `${artifactName}.sha256`,
+    packageName,
+    `${packageName}.sha256`,
+    "BUILD-PROVENANCE.txt",
+  ];
   const shouldBuild = requiredAssets.some((name) => !assetNames.has(name));
-  return { ...selected, releaseTag, artifactName, shouldBuild };
+  return {
+    ...selected,
+    releaseTag,
+    artifactName,
+    archPkgver,
+    packageName,
+    shouldBuild,
+  };
 }
 
 function formatGithubOutput(result) {
@@ -75,6 +109,8 @@ function formatGithubOutput(result) {
     `published_at=${result.publishedAt}`,
     `release_tag=${result.releaseTag}`,
     `artifact_name=${result.artifactName}`,
+    `arch_pkgver=${result.archPkgver}`,
+    `package_name=${result.packageName}`,
     `should_build=${result.shouldBuild}`,
     "",
   ].join("\n");
@@ -106,4 +142,10 @@ if (require.main === module) {
   });
 }
 
-module.exports = { formatGithubOutput, resolveNightly, run, selectLatestNightly };
+module.exports = {
+  deriveArchPackage,
+  formatGithubOutput,
+  resolveNightly,
+  run,
+  selectLatestNightly,
+};
