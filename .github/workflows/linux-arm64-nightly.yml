@@ -109,6 +109,7 @@ jobs:
             libudev-dev \
             libx11-xcb1 \
             libxss1 \
+            libsecret-1-dev \
             makepkg \
             pacman-package-manager \
             passwd \
