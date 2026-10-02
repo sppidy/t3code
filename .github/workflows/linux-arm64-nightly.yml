@@ -145,6 +145,20 @@ jobs:
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           test "$(git tag --points-at HEAD | grep -Fx "$UPSTREAM_TAG")" = "$UPSTREAM_TAG"
 
+      - name: Exclude x64 node-pty prebuild
+        shell: bash
+        run: |
+          set -euo pipefail
+          # node-pty ships Linux prebuilds for x64 and arm64, and upstream's
+          # LINUX_FILE_EXCLUSIONS keeps both. electron-builder rebuilds
+          # node-pty for arm64, so the x64 prebuild is dead weight that fails
+          # the payload architecture check below.
+          script=scripts/build-desktop-artifact.ts
+          sed -i '/^export const LINUX_FILE_EXCLUSIONS = \[$/a\  "!**/node_modules/node-pty/prebuilds/linux-x64/**/*",' "$script"
+          if ! grep -Fq '"!**/node_modules/node-pty/prebuilds/linux-x64/**/*",' "$script"; then
+            echo "::warning file=$script::LINUX_FILE_EXCLUSIONS not found; x64 node-pty prebuild may be packaged"
+          fi
+
       - name: Install Rust
         shell: bash
         run: |
