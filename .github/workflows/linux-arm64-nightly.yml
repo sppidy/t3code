@@ -80,6 +80,11 @@ jobs:
       ARCH_PKGVER: ${{ needs.resolve.outputs.arch_pkgver }}
       PACKAGE_NAME: ${{ needs.resolve.outputs.package_name }}
       PAGES_BASE_URL: https://t3-repo.sppidy.in
+      # Public T3 Connect config from upstream's own builds; the UI hides Connect without it.
+      T3CODE_CLERK_PUBLISHABLE_KEY: ${{ vars.T3CODE_CLERK_PUBLISHABLE_KEY }}
+      T3CODE_CLERK_JWT_TEMPLATE: ${{ vars.T3CODE_CLERK_JWT_TEMPLATE }}
+      T3CODE_CLERK_CLI_OAUTH_CLIENT_ID: ${{ vars.T3CODE_CLERK_CLI_OAUTH_CLIENT_ID }}
+      T3CODE_RELAY_URL: ${{ vars.T3CODE_RELAY_URL }}
     outputs:
       upstream_commit: ${{ steps.package.outputs.upstream_commit }}
     steps:
@@ -182,6 +187,17 @@ jobs:
 
       - name: Align package versions
         run: node scripts/update-release-package-versions.ts "$VERSION"
+
+      - name: Require T3 Connect config
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in T3CODE_CLERK_PUBLISHABLE_KEY T3CODE_CLERK_JWT_TEMPLATE T3CODE_CLERK_CLI_OAUTH_CLIENT_ID T3CODE_RELAY_URL; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::Repository variable $name is not set"
+              exit 1
+            fi
+          done
 
       - name: Build ARM64 AppImage
         run: |
